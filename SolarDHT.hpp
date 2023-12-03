@@ -341,7 +341,7 @@ public:
         Serial.print("RH@");
         Serial.println(millis() - wakeupTime);  // 35 ms, delta 33 ms (OK)
       #endif
-        if (sensor.readTemperatureForHumidity())
+        if (sensor.readCachedTemperature())
         {
           // update temperature
           temperature = sensor.getTemperature();
