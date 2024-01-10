@@ -2,5 +2,5 @@
     "sketch": "SolarDHT.ino",
     "configuration": "usbstack=arduino,debug=off,sercom4=exclude,cpu=xiao8",
     "board": "Seeeduino:samd:seeed_XIAO_m0",
-    "port": "COM5"
+    "port": "COM10"
 }

@@ -31,7 +31,6 @@ using namespace SAMD21LPE;
 
 #include "SolarDHT.hpp"
 
-
 SolarDHT& solarDHT = SolarDHT::instance();
 
 void setup()
@@ -43,7 +42,7 @@ void setup()
 
   // init serial for debug output
   delay(5000);
-  Serial.begin(9600);
+  Serial.begin(SERIAL_SPEED);
   while(!Serial);
 #else
   // disable non essential MCU modules (including USB)

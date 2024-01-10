@@ -35,6 +35,7 @@ class OregonScientific
 {
 public:
   static const byte MAX_MESSAGE_SIZE = 13; // [bytes]
+  static const u_int16_t BIT_RATE = 1024; // [bit/s]
 
 public:
   OregonScientific() = default;

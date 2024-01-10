@@ -33,7 +33,7 @@
 class Measurement
 {
 public:
-  Measurement() = default;
+  Measurement(size_t maxSamples = 4) : maxSamples(maxSamples) {};
 
 public:
   void setMaxSamples(size_t maxSamples)
@@ -46,21 +46,29 @@ public:
     samples.push_back(sample);
     while (samples.size() > maxSamples)
     {
-      samples.erase(samples.begin());
+      removeOldest();
     }
   }
 
-  float getAverage()
+  void removeOldest()
+  {
+    samples.erase(samples.begin());
+  }
+
+  float getAverage(size_t latest = 0)
   {
     size_t count = samples.size();
     if (count)
     {
+      if (!latest) latest = count;
       float sum = 0;
-      for (auto s: samples)
+      size_t n = 0;
+      for (auto i = samples.rbegin(); i != samples.rend() && n < latest; i++)
       {
-        sum += s;
+        sum += *i;
+        n++;
       }
-      return sum/count;
+      return sum/n;
     }
     else
     {
@@ -69,6 +77,6 @@ public:
   }
 
 private:
-  size_t maxSamples = 4;
+  size_t maxSamples;
   std::vector<float> samples;
 };

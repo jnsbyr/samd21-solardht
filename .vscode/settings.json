@@ -12,5 +12,5 @@
     "arduino_fqbn": "Seeeduino:samd:seeed_XIAO_m0:usbstack=arduino,debug=off,sercom4=exclude,cpu=xiao8",
     "arduino_build_properties": "--warnings more",
     "arduino_upload_properties": "-v",
-    "arduino_port": "COM5"
+    "arduino_port": "COM10"
 }
