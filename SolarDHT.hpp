@@ -38,7 +38,6 @@ using namespace SAMD21LPE;
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <si4432.h>
-#include <SHT2x.h>
 
 #include "Measurement.h"
 #include "OregonScientific.h"
@@ -61,9 +60,9 @@ using namespace SAMD21LPE;
 
 #define TEMP_OFFSET 1.3 // [°C] SAMD21 internal temperature immediately after standby is too low
 
-#define HAS_DHT_SENSOR 1
 #define HAS_RADIO      1
 #define HAS_DISPLAY    1
+#define HAS_DHT_SENSOR 0 // NONE: 0 - Si7021: 1 - HDC1080: 2
 
 #define EXECUTION_TIMEOUT 200 // [ms] max. duration from wakeup to end of transmission
 
@@ -71,6 +70,10 @@ using namespace SAMD21LPE;
 
 #define SUPPLY_VOLTAGE_LOW  2.55 // [V] harvester default seems to be around 2.6 V
 #define SUPPLY_VOLTAGE_HIGH 3.40 // [V]
+
+#if HAS_DHT_SENSOR == 1
+  #include <SHT2x.h>
+#endif
 
 #ifdef DEBUG
 #  define TRANSMIT_PERIOD 10*1000 // [ms] 10 s test period
@@ -103,7 +106,7 @@ private:
     display(GDEW0102T4(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY)),
     hasDisplay(HAS_DISPLAY),
     hasRadio(HAS_RADIO),
-    hasSensor(HAS_DHT_SENSOR)
+    hasSensor(HAS_DHT_SENSOR > 0)
   {};
 
 public:
@@ -217,6 +220,7 @@ public:
     // enable I2C
     if (hasSensor)
     {
+#if HAS_DHT_SENSOR > 0
       System::enableClock(GCM_SERCOM0_CORE + PERIPH_WIRE.getSercomIndex(), GCLK_CLKCTRL_GEN_GCLK0_Val);
 
     #ifdef DEBUG
@@ -255,6 +259,7 @@ public:
         Wire.end();
         hasSensor = false;
       }
+#endif
     }
   }
 
@@ -346,6 +351,7 @@ public:
 
     if (hasSensor)
     {
+#if HAS_DHT_SENSOR > 0
       // async request humidity (takes ~18 ms with 11 bits resolution)
       Wire.begin();
       if (sensor.isConnected())
@@ -362,6 +368,7 @@ public:
         Serial.println("SR!"); // sensor data request error
       }
       #endif
+#endif
     }
 
     if (!hasRadio)
@@ -405,6 +412,7 @@ public:
   {
     if (hasSensor)
     {
+#if HAS_DHT_SENSOR > 0
       // when used with radio no waiting should be necessary
       int available = 20; // ~15 ms for 11 bit humidity request
       while (!sensor.reqHumReady() && (available-- > 0))
@@ -474,6 +482,7 @@ public:
         temperatures.removeOldest();
         temperature = temperatures.getAverage();
       }
+#endif
     }
     else
     {
@@ -726,7 +735,9 @@ public:
   Analog2DigitalConverter& adc;
   OregonScientific oregon;
   Si4432 radio;
+#if HAS_DHT_SENSOR == 1
   Si7021 sensor;
+#endif
   RadioState radioState;
   RealTimeClock& rtc;
   TimerCounter timeout;
