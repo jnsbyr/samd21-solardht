@@ -34,7 +34,7 @@
 #include <TimerCounter.h>
 using namespace SAMD21LPE;
 
-#include <GD_EPDisplay.h>
+#include <GD_ePaper.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <si4432.h>
@@ -56,13 +56,13 @@ using namespace SAMD21LPE;
 #define PIN_RADIO_NSDN 18 // out
 #define PIN_RADIO_CS   17 // out
 
-#define RADIO_TX_POWER 1 // 0..7
+#define RADIO_TX_POWER  1 // 0..7
 
-#define TEMP_OFFSET 1.3 // [°C] SAMD21 internal temperature immediately after standby is too low
+#define TEMP_OFFSET   1.3 // [°C] SAMD21 internal temperature immediately after standby is too low
 
-#define HAS_RADIO      1
-#define HAS_DISPLAY    1
-#define HAS_DHT_SENSOR 0 // NONE: 0 - Si7021: 1 - HDC1080: 2
+#define HAS_RADIO       1
+#define HAS_DISPLAY     1
+#define HAS_DHT_SENSOR  2 // 0=NONE, 1=Si7021, 2=HDC1080
 
 #define EXECUTION_TIMEOUT 200 // [ms] max. duration from wakeup to end of transmission
 
@@ -72,13 +72,15 @@ using namespace SAMD21LPE;
 #define SUPPLY_VOLTAGE_HIGH 3.40 // [V]
 
 #if HAS_DHT_SENSOR == 1
-  #include <SHT2x.h>
+  #include "SHT2x_Wrapper.hpp"
+#elif  HAS_DHT_SENSOR == 2
+  #include "TI_HDC10XX.h"
 #endif
 
 #ifdef DEBUG
-#  define TRANSMIT_PERIOD 10*1000 // [ms] 10 s test period
+  #define TRANSMIT_PERIOD 10*1000 // [ms] 10 s test period
 #else
-#  define TRANSMIT_PERIOD 3UL*60*1000 // [ms] 3 min wakeup period
+  #define TRANSMIT_PERIOD 3UL*60*1000 // [ms] 3 min wakeup period
 #endif
 
 
@@ -103,7 +105,7 @@ private:
     radio(PIN_RADIO_CS, PIN_RADIO_NSDN, PIN_RADIO_NIRQ),
     radioState(RADIO_OFF),
     rtc(RealTimeClock::instance()),
-    display(GDEW0102T4(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY)),
+    display(PIN_EPD_CS, PIN_EPD_DC, PIN_EPD_RST, PIN_EPD_BUSY),
     hasDisplay(HAS_DISPLAY),
     hasRadio(HAS_RADIO),
     hasSensor(HAS_DHT_SENSOR > 0)
@@ -209,9 +211,9 @@ public:
   void setupRTC()
   {
     // configure low power clock generator to run at 1 kHz
-    System::setupClockGenOSCULP32K(GCLKGEN_ID_1K, 4); // 2^(4+1) = 32 -> 1 kHz
+    System::setupClockGenOSCULP32K(GCLKGEN_ID_1K, 4); // div 2^(4+1) = 32 -> 1 kHz
 
-    // enable RTC timer (1 kHz tick, 1 ms duration resolution)
+    // enable RTC timer (1 Hz tick, 1 s duration resolution)
     rtc.enable(GCLKGEN_ID_1K, 1024, 1);
   }
 
@@ -224,24 +226,42 @@ public:
       System::enableClock(GCM_SERCOM0_CORE + PERIPH_WIRE.getSercomIndex(), GCLK_CLKCTRL_GEN_GCLK0_Val);
 
     #ifdef DEBUG
-      Serial.println("initializing Si7021");
+      Serial.println("initializing DHT sensor");
     #endif
 
       // init wire, reset sensor and lower resolution for faster measurement
       bool sensorInitialized = false;
       Wire.begin();
-      Wire.setTimeout(200); // [ms]
+      Wire.setTimeout(10000); // [µs]
       if  (sensor.isConnected())
       {
+      #ifdef DEBUG
+        Serial.println("DHT sensor is connected");
+      #endif
         sensor.reset();
+      #if HAS_DHT_SENSOR == 1
         delay(6); // ~5 ms for soft reset to complete
-        sensorInitialized = sensor.isConnected() && sensor.setResolution(3); // 3: 11 bits / ~18 ms
+      #elif HAS_DHT_SENSOR == 2
+        delay(8); // ~8 ms for soft reset to complete
+      #endif
+        sensorInitialized = sensor.isConnected() && sensor.setResolution(11, 11); // ~18 ms
+      #ifdef DEBUG
+        if (sensorInitialized)
+        {
+          bool voltageOK = sensor.isSupplyVoltageOK();
+          Serial.print("DHT sensor voltage OK: ");
+          Serial.println(voltageOK);
+          uint32_t serial = sensor.readSerialIdLow();
+          Serial.print("DHT sensor SNR: ");
+          Serial.println(serial);
+        }
+      #endif
       }
 
       if (!sensorInitialized)
       {
       #ifdef DEBUG
-        Serial.println("initializing Si7021 failed");
+        Serial.println("initializing DHT sensor failed");
       #endif
         // 3 yellow blinks on sensor init error
         digitalWrite(PIN_LED, LOW);
@@ -266,8 +286,14 @@ public:
   void setupTimer()
   {
     // configure timer counter to run at 1 kHz
-    //timeout.enable(4, GCLKGEN_ID_1K, 1024, TimerCounter::DIV1, TimerCounter::RES16);
-    timeout.enable(4, GCLK_CLKCTRL_GEN_GCLK0_Val, SystemCoreClock, TimerCounter::DIV1024, TimerCounter::RES16); // max. 1398 ms
+    //timeout.enable(4, GCLKGEN_ID_1K, 1024, TimerCounter::DIV1, TimerCounter::RES16); // tick=1ms, max. 65.54 s @ 8 MHz
+    timeout.enable(4, GCLK_CLKCTRL_GEN_GCLK0_Val, SystemCoreClock, TimerCounter::DIV1024, TimerCounter::RES16); // tick=128 µs, max. 8389 ms @ 8 MHz
+
+  #if HAS_RADIO == 0
+    timer.enable(5, GCLK_CLKCTRL_GEN_GCLK0_Val, SystemCoreClock, TimerCounter::DIV1024, TimerCounter::RES16, 1000U, false, 2); // tick=128 µs, max. 8389 ms @ 8 MHz
+    //timer.enable(5, GCLK_CLKCTRL_GEN_GCLK0_Val, SystemCoreClock, TimerCounter::DIV1024, TimerCounter::RES16, 1000U, true, 3); // tick=128 µs, max. 8389 ms @ 8 MHz
+    //timer.enable(5, GCLKGEN_ID_1K, 1024, TimerCounter::DIV1, TimerCounter::RES16, 1000U); // tick=~1 ms
+  #endif
   }
 
   void setupDisplay()
@@ -278,7 +304,7 @@ public:
       // configure display
       display.init();
       display.setRotation(1); // 1=landscape
-      display.setTextColor(GD_EPDisplay::COLOR_BLACK);
+      display.setTextColor(GD_ePaper::COLOR_BLACK);
     }
   }
 
@@ -288,6 +314,12 @@ public:
    */
   void setup()
   {
+  #ifdef DEBUG
+    Serial.print("VTOR:");
+    Serial.println(SCB->VTOR);
+  #endif
+    System::cacheVectorTable();
+
     // start RTC counter
     setupRTC();
 
@@ -349,14 +381,14 @@ public:
     // read supply voltage
     readSupplyVoltage();
 
+  #if HAS_DHT_SENSOR > 0
     if (hasSensor)
     {
-#if HAS_DHT_SENSOR > 0
       // async request humidity (takes ~18 ms with 11 bits resolution)
       Wire.begin();
       if (sensor.isConnected())
       {
-        sensor.requestHumidity();
+        sensor.startAcquisition(sensor.ACQ_TYPE_COMBINED);
       #ifdef DEBUG
         Serial.print("SR@"); // sensor data requested
         Serial.println(millis() - wakeupTime); // 2 ms, delta 1 ms (OK)
@@ -368,29 +400,42 @@ public:
         Serial.println("SR!"); // sensor data request error
       }
       #endif
-#endif
+  #endif
     }
 
     if (!hasRadio)
     {
       // no radio: blocking read sensor and display
+  #if HAS_RADIO == 0 && HAS_DHT_SENSOR == 2
+      // passive waiting during acquisition
+    #ifdef DEBUG
+      System::setSleepMode(System::IDLE0); // only CPU
+    #else
+      //System::setSleepMode(System::STANDBY);
+      System::setSleepMode(System::IDLE2);
+    #endif
+      //System::disableSysTick();
+      //timer.wait(sensor.getAcquisitionTime() + 1500); // [µs]
+      timer.wait((sensor.getAcquisitionTime() + 1500)/1000); // [ms]
+      //System::enableSysTick();
+  #endif
       readSensor();
       updateDisplay();
     }
 
-#ifdef DEBUG
+  #ifdef DEBUG
     Serial.print("IC@"); // init completed
     Serial.println(millis() - wakeupTime); // 2 ms, delta 1 ms (OK)
-#endif
+  #endif
 
     if (hasRadio)
     {
-      // do not shutdown completely to keep timer running
+      // do not shutdown completely after exiting ISR (SleepOnExitISR) to keep timer running
       // @todo and because of long XOSC32K/DFLL48M startup time?
       //if (SystemCoreClock > 8000000)
       //{
-      System::setSleepMode(System::IDLE2);
-      //System::setSleepMode(System::IDLE0);
+      System::setSleepMode(System::IDLE2); // keep only oscillators
+      //System::setSleepMode(System::IDLE0); // only CPU
       //}
     }
     else
@@ -410,24 +455,36 @@ public:
 
   void readSensor()
   {
+  #if HAS_DHT_SENSOR > 0
     if (hasSensor)
     {
-#if HAS_DHT_SENSOR > 0
       // when used with radio no waiting should be necessary
       int available = 20; // ~15 ms for 11 bit humidity request
-      while (!sensor.reqHumReady() && (available-- > 0))
+      while (!sensor.isAcquisitionComplete() && (available-- > 0))
       {
         delay(1);
       }
 
-      bool humidityUpdated = false;
       bool temperatureUpdated = false;
+      bool humidityUpdated = false;
       if (available)
       {
       #ifdef DEBUG
         Serial.print("RHA@");
         Serial.println(millis() - wakeupTime);  // 35 ms, delta 33 ms (OK)
       #endif
+        if (sensor.readTemperature())
+        {
+          // update temperature
+          float currentTemp = sensor.getTemperature();
+          temperatures.add(currentTemp);
+          temperature = temperatures.getAverage();
+          temperatureUpdated = true;
+        #ifdef DEBUG
+          Serial.print("RT@");
+          Serial.println(millis() - wakeupTime);  // 35 ms, delta 33 ms (OK)
+        #endif
+        }
         if (sensor.readHumidity())
         {
           // update humidity
@@ -438,24 +495,6 @@ public:
         #ifdef DEBUG
           Serial.print("RH@");
           Serial.println(millis() - wakeupTime);  // 35 ms, delta 33 ms (OK)
-        #endif
-          if (sensor.readCachedTemperature())
-          {
-            // update temperature
-            float currentTemp = sensor.getTemperature();
-            temperatures.add(currentTemp);
-            temperature = temperatures.getAverage();
-            temperatureUpdated = true;
-          #ifdef DEBUG
-            Serial.print("RT@");
-            Serial.println(millis() - wakeupTime);  // 35 ms, delta 33 ms (OK)
-          #endif
-          }
-        }
-        else
-        {
-        #ifdef DEBUG
-          Serial.println("RHF");
         #endif
         }
       #ifdef DEBUG
@@ -472,19 +511,20 @@ public:
       }
 
       // remove oldest sample if not updated to keep average moving
-      if (!humidityUpdated)
-      {
-        humidities.removeOldest();
-        humidity = humidities.getAverage();
-      }
+      // @TODO add dummy instead
       if (!temperatureUpdated)
       {
         temperatures.removeOldest();
         temperature = temperatures.getAverage();
       }
-#endif
+      if (!humidityUpdated)
+      {
+        humidities.removeOldest();
+        humidity = humidities.getAverage();
+      }
     }
     else
+  #endif
     {
       // no sensor, read SAMD21 temperature and update temperature average
       float currentTemp = adc.read(ADC_INPUTCTRL_MUXPOS_TEMP_Val) + TEMP_OFFSET;
@@ -679,7 +719,7 @@ public:
       radio.turnOff();
     }
 
-    // send display to deep sleep if unexepectly active
+    // send display to deep sleep if unexpectedly active
     // notes:
     // - display will stay in deep sleep until an update is performed
     // - display will be automatically send to deep sleep after an update
@@ -736,12 +776,17 @@ public:
   OregonScientific oregon;
   Si4432 radio;
 #if HAS_DHT_SENSOR == 1
-  Si7021 sensor;
+  SHT2x_Wrapper<Si7021> sensor;
+#elif HAS_DHT_SENSOR == 2
+  TI_HDC1080 sensor;
 #endif
   RadioState radioState;
   RealTimeClock& rtc;
   TimerCounter timeout;
-  GD_EPDisplay display;
+#if HAS_RADIO == 0
+  TimerCounter timer;
+#endif
+  GDEW0102T4 display;
   Measurement humidities;
   Measurement temperatures;
   float supplyVoltage = 0;
