@@ -52,7 +52,7 @@ public:
 
   void removeOldest()
   {
-    samples.erase(samples.begin());
+    if (!samples.empty()) samples.erase(samples.begin());
   }
 
   float getAverage(size_t latest = 0)
